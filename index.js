@@ -35,6 +35,9 @@ let lastDisconnectedAt = null;
 const stats = { received: 0, sent: 0, errors: 0 };
 const events = [];
 
+const activeThreads = new Set();
+let groupsCache = { at: 0, list: [] };
+
 function pushEvent(type, message) {
   events.unshift({ type, message, at: new Date().toISOString() });
   if (events.length > 100) events.length = 100;
@@ -141,7 +144,7 @@ function onMessage(api, event) {
     api.changeThreadNickname(st.nicknameLock, threadID, botUserID, (err) => {});
   }
 
-  if (!st.autoReply && !store.isThreadActive(threadID)) return;
+  if (!st.autoReply && !activeThreads.has(threadID) && !store.isThreadActive(threadID)) return;
 
   let chosenReply = triggers.getTriggerReply(body);
   if (!chosenReply) {
@@ -151,6 +154,68 @@ function onMessage(api, event) {
   sendHumanizedReply(api, chosenReply, threadID, event.messageID, trafficSendMessage)
     .then(() => { stats.sent++; })
     .catch(err => noteError("humanized reply", err));
+}
+
+function fetchThreadList(api, limit) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (err, list) => { if (settled) return; settled = true; err ? reject(err) : resolve(list || []); };
+    const timer = setTimeout(() => done(new Error("Facebook timeout")), 30000);
+    try {
+      const r = api.getThreadList(limit, null, ["INBOX"], (err, list) => { clearTimeout(timer); done(err, list); });
+      if (r && typeof r.then === "function") r.then((l) => { clearTimeout(timer); done(null, l); }).catch((e) => { clearTimeout(timer); done(e); });
+    } catch (e) { clearTimeout(timer); done(e); }
+  });
+}
+
+async function listGroups() {
+  const api = currentApi;
+  if (!api || !messengerConnected) throw new Error("Bot is not connected to Messenger");
+  if (typeof api.getThreadList !== "function") throw new Error("No getThreadList()");
+
+  const age = Date.now() - groupsCache.at;
+  if (!groupsCache.at || age > 5 * 60 * 1000) {
+    const raw = await fetchThreadList(api, 50);
+    groupsCache = {
+      at: Date.now(),
+      list: raw
+        .filter((t) => t && (t.isGroup === true || t.threadType === 2))
+        .map((t) => ({
+          id: String(t.threadID),
+          name: String(t.name || t.threadName || "Unnamed group").slice(0, 80),
+          members: (t.participantIDs || t.participants || []).length
+        }))
+    };
+  }
+
+  return groupsCache.list.map((g) => ({
+    id: g.id,
+    name: g.name,
+    members: g.members,
+    active: activeThreads.has(g.id) || store.isThreadActive(g.id)
+  })).sort((a, b) => Number(b.active) - Number(a.active));
+}
+
+async function startGroup(threadID, name, message) {
+  const api = currentApi;
+  if (!api || !messengerConnected) throw new Error("Bot is not connected to Messenger");
+  threadID = String(threadID || "").trim();
+  if (!threadID) throw new Error("Invalid group ID");
+
+  const text = String(message || "sige tumakbo ka na HAHAHAHAHA").trim();
+  activeThreads.add(threadID);
+  store.setThreadState(threadID, true);
+
+  await sendHumanizedReply(api, text, threadID, null, trafficSendMessage);
+  stats.sent++;
+  pushEvent("group", `Started group ${name || threadID} with message: ${text}`);
+}
+
+async function stopGroup(threadID) {
+  threadID = String(threadID || "").trim();
+  activeThreads.delete(threadID);
+  store.setThreadState(threadID, false);
+  pushEvent("group", `Stopped group ${threadID}`);
 }
 
 function startBot(api, gen) {
@@ -244,7 +309,10 @@ dashboardApi(PORT, () => ({
   reconnect: async () => {
     disconnectBot();
     loginBot();
-  }
+  },
+  listGroups,
+  startGroup,
+  stopGroup
 });
 
 loginBot();
