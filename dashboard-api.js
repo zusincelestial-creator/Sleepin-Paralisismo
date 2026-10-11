@@ -22,8 +22,16 @@ module.exports = function(port, getStatusFn, actions) {
           button { background: #d92038; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; }
           button:hover { background: #ff3344; }
           pre { background: #08080a; padding: 12px; border-radius: 5px; overflow-x: auto; color: #00ffcc; font-size: 12px; }
-          .flex { display: flex; gap: 15px; }
-          .flex > div { flex: 1; }
+          .flex { display: flex; gap: 15px; flex-wrap: wrap; }
+          .flex > div { flex: 1; min-width: 300px; }
+          .group-row { display: flex; justify-content: space-between; align-items: center; background: #1a1a24; padding: 12px; border-radius: 6px; margin-top: 10px; border: 1px solid #2e2e3d; }
+          .group-info { overflow: hidden; margin-right: 10px; }
+          .group-name { font-weight: bold; color: #ff3344; font-size: 14px; }
+          .group-meta { font-size: 11px; color: #888899; margin-top: 3px; }
+          .btn-start { background: #00b359; width: auto; padding: 6px 16px; font-size: 12px; }
+          .btn-start:hover { background: #00cc66; }
+          .btn-stop { background: #d92038; width: auto; padding: 6px 16px; font-size: 12px; }
+          .btn-stop:hover { background: #ff3344; }
         </style>
       </head>
       <body>
@@ -51,6 +59,12 @@ module.exports = function(port, getStatusFn, actions) {
         </div>
 
         <div class="card">
+          <h3>💬 Active Group Chats (GC Control)</h3>
+          <button onclick="loadGroups()" style="background:#2a2a38; margin-bottom: 15px;">Refresh list</button>
+          <div id="groupsContainer">Loading groups...</div>
+        </div>
+
+        <div class="card">
           <h3>📊 Live Status & Auto-Debug Telemetry</h3>
           <button onclick="fetchStatus()">Refresh Status</button>
           <pre id="statusBox">Loading telemetry...</pre>
@@ -69,12 +83,60 @@ module.exports = function(port, getStatusFn, actions) {
               }
             } catch(e) { console.error(e); }
           }
+
+          async function loadGroups() {
+            const container = document.getElementById('groupsContainer');
+            container.innerHTML = "Loading groups...";
+            try {
+              const res = await fetch('/api/groups');
+              const groups = await res.json();
+              if(!groups.length) {
+                container.innerHTML = "<p>No groups found or bot not connected yet.</p>";
+                return;
+              }
+              let html = "";
+              groups.forEach(g => {
+                html += \`
+                  <div class="group-row">
+                    <div class="group-info">
+                      <div class="group-name">\${g.name}</div>
+                      <div class="group-meta">\${g.members} members · ID: \${g.id}</div>
+                    </div>
+                    <div>
+                      \${g.active 
+                        ? \`<button class="btn-stop" onclick="toggleGroup('\${g.id}', false)">Stop</button>\` 
+                        : \`<button class="btn-start" onclick="toggleGroup('\${g.id}', true, '\\\${g.name}')">Start</button>\`
+                      }
+                    </div>
+                  </div>
+                \`;
+              });
+              container.innerHTML = html;
+            } catch(e) {
+              container.innerHTML = "<p>Error loading groups. Make sure bot is connected.</p>";
+            }
+          }
+
+          async function toggleGroup(threadID, activate, name) {
+            const endpoint = activate ? '/api/group/start' : '/api/group/stop';
+            const body = activate ? { threadID, name, message: "sige tumakbo ka na HAHAHAHAHA" } : { threadID };
+            const res = await fetch(endpoint, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(body)
+            });
+            alert(await res.text());
+            loadGroups();
+          }
+
           async function saveCookie() {
             const raw = document.getElementById('cookieInput').value;
             const res = await fetch('/api/connect', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({cookie: raw}) });
             alert(await res.text());
             fetchStatus();
+            loadGroups();
           }
+
           async function saveSettings() {
             const botName = document.getElementById('botName').value;
             const nicknameLock = document.getElementById('nicknameLock').value;
@@ -83,13 +145,16 @@ module.exports = function(port, getStatusFn, actions) {
             alert(await res.text());
             fetchStatus();
           }
+
           async function triggerAction(endpoint) {
             const res = await fetch(endpoint, { method: 'POST' });
             alert(await res.text());
             fetchStatus();
           }
+
           setInterval(fetchStatus, 5000);
           fetchStatus();
+          setTimeout(loadGroups, 2000);
         </script>
       </body>
       </html>
@@ -97,6 +162,33 @@ module.exports = function(port, getStatusFn, actions) {
   });
 
   app.get("/api/status", (req, res) => res.json(getStatusFn()));
+
+  app.get("/api/groups", async (req, res) => {
+    try {
+      const list = await actions.listGroups();
+      res.json(list);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/group/start", async (req, res) => {
+    try {
+      await actions.startGroup(req.body.threadID, req.body.name, req.body.message);
+      res.send("Group activated & starter message sent!");
+    } catch (e) {
+      res.status(400).send("Error: " + e.message);
+    }
+  });
+
+  app.post("/api/group/stop", async (req, res) => {
+    try {
+      await actions.stopGroup(req.body.threadID);
+      res.send("Group deactivated successfully.");
+    } catch (e) {
+      res.status(400).send("Error: " + e.message);
+    }
+  });
 
   app.post("/api/connect", async (req, res) => {
     try {
