@@ -1,0 +1,17 @@
+{
+  "name": "sleep-paralysis-bot",
+  "version": "1.0.0",
+  "description": "Undetectable 24/7 Messenger Bot with Self-Heal, Watchdog, and Control Dashboard",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws3-fca": "latest",
+    "express": "latest",
+    "fs-extra": "latest"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
